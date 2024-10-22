@@ -2,7 +2,10 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"maaya-barcode/models"
+	"os/exec"
+	"sync/atomic"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/sqlite"
@@ -10,13 +13,14 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-var DB *gorm.DB
+var (
+	DB         *gorm.DB
+	writeCount uint64
+)
 
 func main() {
-
-	// connection to DB
 	var err error
-	DB, err = gorm.Open(sqlite.Open("test.db"), &gorm.Config{
+	DB, err = gorm.Open(sqlite.Open("prod.db"), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Info),
 	})
 	if err != nil {
@@ -59,6 +63,13 @@ func CreateUser(c *gin.Context) {
 		})
 		return
 	}
+
+	count := atomic.AddUint64(&writeCount, 1)
+
+	if count%20 == 0 {
+		go backup()
+	}
+
 	c.JSON(200, gin.H{
 		"message": "User Created Successfully",
 	})
@@ -80,9 +91,29 @@ func ScanBarcode(c *gin.Context) {
 		return
 	}
 
-	DB.Model(&user).Update("is_present", true)
+	result := DB.Model(&user).Update("is_present", true)
+	if result.Error != nil {
+		fmt.Println("Error updating user:", result.Error)
+		c.JSON(500, gin.H{
+			"message": "Failed to update user",
+		})
+		return
+	}
+
+	count := atomic.AddUint64(&writeCount, 1)
+
+	if count%20 == 0 {
+		go backup() // Run in a separate goroutine
+	}
+
 	c.JSON(200, gin.H{
 		"message": "User found",
 		"user":    user,
 	})
+}
+
+func backup() {
+	log.Println("20 writes done, backing up!")
+	exec.Command("scp", "prod.db", "root@cdn.maaya-pes.co:~")
+
 }
